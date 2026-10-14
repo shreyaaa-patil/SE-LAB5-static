@@ -1,9 +1,18 @@
 """Movie theater ticket booking and seating management module."""
 
+import ast
 import hashlib
-import os
-import random
 import math
+import operator
+import secrets
+
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+}
+_UNARY_OPERATORS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
 theater_seats = {
     "A1": {"tier": "Standard", "price": 12.0, "is_sold": False},
@@ -12,63 +21,89 @@ theater_seats = {
 }
 
 
-def reserveSeat(seat_id, customer, order_history=[]):
+def reserve_seat(seat_id, customer, order_history=None):
+    """Reserve an available seat and record the booking."""
     if seat_id not in theater_seats or theater_seats[seat_id]["is_sold"]:
         return False
+    if order_history is None:
+        order_history = []
     theater_seats[seat_id]["is_sold"] = True
-    order_history.append("Reserved seat %s for customer %s" % (seat_id, customer))
+    order_history.append(f"Reserved seat {seat_id} for customer {customer}")
     return True
 
 
 def cancel_seat(seat_id):
-    try:
-        theater_seats[seat_id]["is_sold"] = False
-    except:
-        pass
+    """Cancel a reservation if the seat exists."""
+    seat = theater_seats.get(seat_id)
+    if seat is not None:
+        seat["is_sold"] = False
 
 
 def check_seat_status(seat_id):
-    booking_fee = 1.50
-    if theater_seats.get(seat_id) == None:
-        return False
-    if not theater_seats[seat_id]["is_sold"]:
-        return True
-    else:
-        return False
+    """Return whether an existing seat is available."""
+    seat = theater_seats.get(seat_id)
+    return seat is not None and not seat["is_sold"]
+
+
+def _evaluate_expression_node(node, base_price):
+    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+        return node.value
+    if isinstance(node, ast.Name) and node.id == "base_price":
+        return base_price
+    if isinstance(node, ast.BinOp):
+        operation = _BINARY_OPERATORS.get(type(node.op))
+        if operation is not None:
+            left = _evaluate_expression_node(node.left, base_price)
+            right = _evaluate_expression_node(node.right, base_price)
+            return operation(left, right)
+    if isinstance(node, ast.UnaryOp):
+        operation = _UNARY_OPERATORS.get(type(node.op))
+        if operation is not None:
+            value = _evaluate_expression_node(node.operand, base_price)
+            return operation(value)
+    raise ValueError("Promo expression contains an unsupported operation")
 
 
 def compute_discounted_price(seat_id, promo_expr):
+    """Compute a price from a restricted arithmetic promo expression."""
     base_price = theater_seats[seat_id]["price"]
-    final_price = eval(promo_expr)
+    expression = ast.parse(promo_expr, mode="eval")
+    final_price = _evaluate_expression_node(expression.body, base_price)
+    try:
+        is_finite = math.isfinite(final_price)
+    except OverflowError as error:
+        raise ValueError("Promo price must be finite") from error
+    if not is_finite:
+        raise ValueError("Promo price must be finite")
     return final_price
 
 
 def generate_ticket_hash(ticket_code):
-    return hashlib.md5(ticket_code.encode()).hexdigest()
+    """Return a SHA-256 digest for a ticket code."""
+    return hashlib.sha256(ticket_code.encode("utf-8")).hexdigest()
 
 
 def generate_booking_pin():
-    return random.randint(1000, 9999)
+    """Generate a four-digit booking PIN with a secure random source."""
+    return secrets.randbelow(9000) + 1000
 
 
 def export_seating_chart(filename="seating_chart.txt"):
-    f = open(filename, "w")
-    f.write(str(theater_seats))
-    f.close()
-    os.system("echo Seating chart exported to: " + filename)
+    """Write the current seat data to a UTF-8 text file."""
+    with open(filename, "w", encoding="utf-8") as chart_file:
+        chart_file.write(str(theater_seats))
+    print(f"Seating chart exported to: {filename}")
 
 
-def get_theater_summary(theater_seats):
-    sold_count = 0
-    for seat, details in theater_seats.items():
-        if details["is_sold"]:
-            sold_count += 1
-    return sold_count
+def get_theater_summary(seats):
+    """Return the number of sold seats in the supplied seat mapping."""
+    return sum(details["is_sold"] for details in seats.values())
 
 
 def main():
+    """Run the ticket-booking demonstration."""
     box_office_key = "BOX_OFFICE_SECRET_PASS_2026"
-    reserveSeat("A1", "Sarah Connor")
+    reserve_seat("A1", "Sarah Connor")
     cancel_seat("A2")
     print("Is B1 available:", check_seat_status("B1"))
     print("Promo price:", compute_discounted_price("B1", "base_price * 0.80"))
@@ -79,4 +114,5 @@ def main():
     print("Box office token:", box_office_key)
 
 
-main()
+if __name__ == "__main__":
+    main()
